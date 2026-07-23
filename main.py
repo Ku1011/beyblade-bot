@@ -11,8 +11,8 @@ from playwright.sync_api import sync_playwright
 # -------------------------------------------------------------------
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1529665191586041876/adK2AjMfMcScpiskG32xmthHpU-CpAsnQ_ymncITfBmYip1DoqPL3qJLaHVO2maVjUXJ"
 
-# 檢查循環間隔時間 (秒) - 每 60 秒輪流檢查一次
-CHECK_INTERVAL = 60
+# ⚡ 檢查循環間隔時間 (秒) - 設定為每 5 秒巡檢一次
+CHECK_INTERVAL = 5
 
 # 監控的爆旋陀螺商品清單
 TARGET_ITEMS = [
@@ -37,7 +37,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "🤖 爆旋陀螺 24/7 多商品監控 Bot 運作中！"
+    return f"🤖 爆旋陀螺 5 秒極速監控系統運作中！當前時間: {datetime.now().strftime('%H:%M:%S')}"
 
 def run_flask():
     port = int(os.environ.get("PORT", 5131))
@@ -58,20 +58,19 @@ def send_discord_notify(item_name, item_url):
     }
     try:
         response = requests.post(DISCORD_WEBHOOK_URL, json=message)
-        if response.status_code == 204 or response.status_code == 200:
-            print(f"✅ [{item_name}] Discord 通知發送成功！", flush=True)
+        if response.status_code in [200, 204]:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ [{item_name}] Discord 通知發送成功！", flush=True)
         else:
-            print(f"⚠️ Discord 通知發送失敗，Status Code: {response.status_code}", flush=True)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ Discord 通知發送失敗，Status Code: {response.status_code}", flush=True)
     except Exception as e:
-        print(f"❌ 發送 Discord 通知時發生錯誤: {e}", flush=True)
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ 發送 Discord 通知時發生錯誤: {e}", flush=True)
 
 # -------------------------------------------------------------------
-# 4. Playwright 多商品庫存監控主邏輯
+# 4. Playwright 多商品極速監控主邏輯
 # -------------------------------------------------------------------
 def monitor_loop():
-    print("🤖 爆旋陀螺 3 商品自動監控系統啟動...", flush=True)
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚀 爆旋陀螺 5 秒極速監控系統啟動...", flush=True)
     
-    # 記錄已通知過的商品，避免重複洗版
     notified_items = {}
 
     with sync_playwright() as p:
@@ -82,44 +81,49 @@ def monitor_loop():
         page = context.new_page()
 
         while True:
-            print(f"\n--- 🔄 開始新一輪巡檢 ({datetime.now().strftime('%H:%M:%S')}) ---", flush=True)
+            start_time = time.time()
+            now_time = datetime.now().strftime("%H:%M:%S")
+            print(f"\n[{now_time}] 🔄 [巡檢開始] 正檢查 {len(TARGET_ITEMS)} 個商品庫存...", flush=True)
 
             for item in TARGET_ITEMS:
                 name = item["name"]
                 url = item["url"]
+                t_check = datetime.now().strftime("%H:%M:%S")
 
-                print(f"🔍 正在檢查: [{name}]...", flush=True)
+                print(f"[{t_check}] 🔍 正在載入並檢查: [{name}]", flush=True)
 
                 try:
-                    page.goto(url, timeout=30000, wait_until="domcontentloaded")
-                    time.sleep(2)  # 等待 JS 動態元件載入
-
-                    # 判斷庫存/預購狀態
+                    # 使用 domcontentloaded 快速完成頁面載入
+                    page.goto(url, timeout=15000, wait_until="domcontentloaded")
+                    
                     is_available = (
                         page.locator("text=預購").is_visible() or 
                         page.locator("text=加入購物車").is_visible() or
                         page.locator("text=Pre-order").is_visible()
                     )
 
+                    t_res = datetime.now().strftime("%H:%M:%S")
                     if is_available:
-                        print(f"🎉 🎉 🎉 [{name}] 有貨/開放預購啦！", flush=True)
-                        
+                        print(f"[{t_res}] 🎉🎉🎉 [{name}] 開放預購/有貨！", flush=True)
                         if not notified_items.get(url, False):
                             send_discord_notify(name, url)
                             notified_items[url] = True
                         else:
-                            print(f"ℹ️ [{name}] 已經通知過，跳過重複發送。", flush=True)
+                            print(f"[{t_res}] ℹ️ [{name}] 已發送過通知，跳過。", flush=True)
                     else:
-                        print(f"❌ [{name}] 暫時缺貨/未開放", flush=True)
+                        print(f"[{t_res}] ❌ [{name}] 目前無貨", flush=True)
                         notified_items[url] = False
 
                 except Exception as e:
-                    print(f"⚠️ 檢查 [{name}] 時發生例外狀況: {e}", flush=True)
+                    t_err = datetime.now().strftime("%H:%M:%S")
+                    print(f"[{t_err}] ⚠️ 檢查 [{name}] 超時或出錯: {e}", flush=True)
 
-                time.sleep(2)
-
-            print(f"😴 一輪檢查完畢，等待 {CHECK_INTERVAL} 秒後進行下一輪...", flush=True)
-            time.sleep(CHECK_INTERVAL)
+            # 計算當前巡檢總耗時並精確計時 5 秒
+            elapsed = time.time() - start_time
+            sleep_time = max(0, CHECK_INTERVAL - elapsed)
+            
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] ⏱️ 本輪耗時 {elapsed:.2f} 秒。等待 {sleep_time:.2f} 秒後進行下一輪...", flush=True)
+            time.sleep(sleep_time)
 
 # -------------------------------------------------------------------
 # 5. 主程式入口

@@ -1,5 +1,5 @@
 # 使用 Playwright 官方預先裝好 Chromium 及所有系統依賴的鏡像
-FROM mcr.microsoft.com/playwright/python:v1.40.0-jammy
+FROM mcr.microsoft.com/playwright/python:v1.61.0-jammy
 
 # 設定工作目錄
 WORKDIR /app

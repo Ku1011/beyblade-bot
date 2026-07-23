@@ -96,12 +96,13 @@ def monitor_loop():
                     # 使用 domcontentloaded 快速完成頁面載入
                     page.goto(url, timeout=15000, wait_until="domcontentloaded")
                     
-                    is_available = (
-                        page.locator("text=預購").is_visible() or 
-                        page.locator("text=加入購物車").is_visible() or
-                        page.locator("text=Pre-order").is_visible()
-                    )
-
+                  is_available = (
+    page.locator("text=預訂").first.is_visible() or 
+    page.locator("text=預先訂購").first.is_visible() or 
+    page.locator("text=預購").first.is_visible() or 
+    page.locator("text=加入購物車").first.is_visible() or
+    page.locator("text=Pre-order").first.is_visible()
+)
                     t_res = datetime.now().strftime("%H:%M:%S")
                     if is_available:
                         print(f"[{t_res}] 🎉🎉🎉 [{name}] 開放預購/有貨！", flush=True)

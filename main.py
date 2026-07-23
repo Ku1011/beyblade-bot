@@ -11,10 +11,10 @@ from playwright.sync_api import sync_playwright
 # -------------------------------------------------------------------
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1529665191586041876/adK2AjMfMcScpiskG32xmthHpU-CpAsnQ_ymncITfBmYip1DoqPL3qJLaHVO2maVjUXJ"
 
-# ⚡ 巡檢間隔時間 (秒) - 每 5 秒極速檢查一次
+# ⚡ 巡檢間隔時間 (秒)
 CHECK_INTERVAL = 5
 
-# 🔔 重複通知冷卻時間 (秒) - 若持續有貨，每 2 分鐘 (120 秒) 最多通知一次
+# 🔔 重複通知冷卻時間 (秒) - 每 2 分鐘 (120 秒) 最多通知一次
 NOTIFICATION_COOLDOWN = 120
 
 # 監控的爆旋陀螺商品清單
@@ -40,7 +40,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return f"🤖 爆旋陀螺 5秒巡檢/2分鐘通知 Bot 運作中！當前時間: {datetime.now().strftime('%H:%M:%S')}"
+    return f"🤖 爆旋陀螺 低記憶體極速 Bot 運作中！當前時間: {datetime.now().strftime('%H:%M:%S')}"
 
 def run_flask():
     port = int(os.environ.get("PORT", 5131))
@@ -69,20 +69,41 @@ def send_discord_notify(item_name, item_url):
         print(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ 發送 Discord 通知時發生錯誤: {e}", flush=True)
 
 # -------------------------------------------------------------------
-# 4. Playwright 多商品極速監控主邏輯
+# 4. Playwright 極速+超省記憶體監控邏輯
 # -------------------------------------------------------------------
 def monitor_loop():
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚀 5 秒極速巡檢 / 2 分鐘重複通知系統啟動...", flush=True)
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚀 極致省記憶體監控系統啟動...", flush=True)
     
-    # 紀錄各商品上次通知的時間戳 (Key: url, Value: timestamp)
     last_notified_time = {}
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        # 🛡️ 關鍵優化 1：傳入低記憶體 Chromium 啟動參數
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-accelerated-2d-canvas",
+                "--no-first-run",
+                "--no-zygote",
+                "--disable-gpu",
+                "--single-process"
+            ]
+        )
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
         page = context.new_page()
+
+        # 🛡️ 關鍵優化 2：封鎖圖片、字型、CSS 樣式表（大幅節省 RAM 並倍增載入速度）
+        def block_unnecessary_resources(route):
+            if route.request.resource_type in ["image", "stylesheet", "font", "media"]:
+                route.abort()
+            else:
+                route.continue_()
+
+        page.route("**/*", block_unnecessary_resources)
 
         while True:
             start_time = time.time()
@@ -97,18 +118,16 @@ def monitor_loop():
                 print(f"[{t_check}] 🔍 正在載入並檢查: [{name}]", flush=True)
 
                 try:
-                    page.goto(url, timeout=15000, wait_until="domcontentloaded")
+                    # 不下載圖片/CSS 後，頁面載入速度極快
+                    page.goto(url, timeout=12000, wait_until="domcontentloaded")
                     
-                    # 1. 檢查是否有出現缺貨字眼
+                    # 判斷庫存
                     is_out_of_stock = page.locator("text=暫時缺貨").first.is_visible()
-
-                    # 2. 檢查是否有出現真正的預訂/購買按鈕 (避開 Tag 誤判)
                     has_buy_button = (
                         page.locator("text=預訂").first.is_visible() or 
                         page.locator("text=加入購物車").first.is_visible()
                     )
 
-                    # 只有在 "未顯示缺貨" 且 "出現預訂/購物車按鈕" 時才算有貨
                     is_available = has_buy_button and not is_out_of_stock
 
                     t_res = datetime.now().strftime("%H:%M:%S")
@@ -118,27 +137,24 @@ def monitor_loop():
                         current_timestamp = time.time()
                         last_time = last_notified_time.get(url, 0)
 
-                        # 距離上次通知超過 120 秒 (2 分鐘) 才再次發送
                         if current_timestamp - last_time >= NOTIFICATION_COOLDOWN:
                             send_discord_notify(name, url)
                             last_notified_time[url] = current_timestamp
                         else:
                             wait_left = int(NOTIFICATION_COOLDOWN - (current_timestamp - last_time))
-                            print(f"[{t_res}] ⏳ [{name}] 仍有貨中，處於 2 分鐘冷卻期（剩餘 {wait_left} 秒可再次通知）。", flush=True)
+                            print(f"[{t_res}] ⏳ [{name}] 仍有貨中，處於冷卻期（剩餘 {wait_left} 秒）。", flush=True)
                     else:
                         print(f"[{t_res}] ❌ [{name}] 目前暫時缺貨", flush=True)
-                        # 重置通知冷卻，確保一變回有貨能第一時間發送通知
                         last_notified_time[url] = 0
 
                 except Exception as e:
                     t_err = datetime.now().strftime("%H:%M:%S")
                     print(f"[{t_err}] ⚠️ 檢查 [{name}] 出錯: {e}", flush=True)
 
-            # 計算本輪耗時，補齊差距時間確保整體每 5 秒巡檢一次
             elapsed = time.time() - start_time
             sleep_time = max(0, CHECK_INTERVAL - elapsed)
             
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] ⏱️ 本輪耗時 {elapsed:.2f} 秒。等待 {sleep_time:.2f} 秒進行下一輪巡檢...", flush=True)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] ⏱️ 本輪耗時 {elapsed:.2f} 秒。等待 {sleep_time:.2f} 秒...", flush=True)
             time.sleep(sleep_time)
 
 # -------------------------------------------------------------------

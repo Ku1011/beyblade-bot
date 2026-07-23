@@ -11,23 +11,26 @@ from playwright.sync_api import sync_playwright
 # -------------------------------------------------------------------
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1529665191586041876/adK2AjMfMcScpiskG32xmthHpU-CpAsnQ_ymncITfBmYip1DoqPL3qJLaHVO2maVjUXJ"
 
-# ⚡ 巡檢間隔時間 (秒)
+# ⚡ 巡檢間隔時間 (秒) - 每 5 秒巡檢一次
 CHECK_INTERVAL = 5
 
-# 🔔 重複通知冷卻時間 (秒) - 每 2 分鐘 (120 秒) 最多通知一次
+# 🔔 **個別商品**重複通知冷卻時間 (秒) - 每個商品獨立計算 2 分鐘 (120 秒)
 NOTIFICATION_COOLDOWN = 120
 
 # 監控的爆旋陀螺商品清單
 TARGET_ITEMS = [
     {
+        "id": "item_1",
         "name": "BX-00 翔龍神劍3-60F V2",
         "url": "https://www.toysrus.com.hk/zh-hk/pre-order-beyblade-x-bx-00-dragonsword-3-60f-2.0-expected-august-2026-10159693.html"
     },
     {
+        "id": "item_2",
         "name": "BX-57 三陀螺對戰盒 (黑色版)",
         "url": "https://www.toysrus.com.hk/zh-hk/pre-order-beyblade-x-bx-51-3-on-3-deck-case-black-version-expected-august-2026-10159697.html"
     },
     {
+        "id": "item_3",
         "name": "UX-21 煉獄下界三陀螺套裝",
         "url": "https://www.toysrus.com.hk/zh-hk/pre-order-beyblade-x-ux-21-hellsnether-deck-set-expected-august-2026-10159699.html"
     }
@@ -40,7 +43,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return f"🤖 爆旋陀螺 低記憶體極速 Bot 運作中！當前時間: {datetime.now().strftime('%H:%M:%S')}"
+    return f"🤖 爆旋陀螺 獨立冷卻極速 Bot 運作中！當前時間: {datetime.now().strftime('%H:%M:%S')}"
 
 def run_flask():
     port = int(os.environ.get("PORT", 5131))
@@ -69,15 +72,15 @@ def send_discord_notify(item_name, item_url):
         print(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ 發送 Discord 通知時發生錯誤: {e}", flush=True)
 
 # -------------------------------------------------------------------
-# 4. Playwright 極速+超省記憶體監控邏輯
+# 4. Playwright 極速+個別商品獨立冷卻監控邏輯
 # -------------------------------------------------------------------
 def monitor_loop():
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚀 極致省記憶體監控系統啟動...", flush=True)
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚀 個別商品獨立冷卻監控系統啟動...", flush=True)
     
-    last_notified_time = {}
+    # 獨立記錄每個商品的最後通知時間 (Key: item_id, Value: timestamp)
+    item_last_notified = {}
 
     with sync_playwright() as p:
-        # 🛡️ 關鍵優化 1：傳入低記憶體 Chromium 啟動參數
         browser = p.chromium.launch(
             headless=True,
             args=[
@@ -87,8 +90,7 @@ def monitor_loop():
                 "--disable-accelerated-2d-canvas",
                 "--no-first-run",
                 "--no-zygote",
-                "--disable-gpu",
-                "--single-process"
+                "--disable-gpu"
             ]
         )
         context = browser.new_context(
@@ -96,14 +98,14 @@ def monitor_loop():
         )
         page = context.new_page()
 
-        # 🛡️ 關鍵優化 2：封鎖圖片、字型、CSS 樣式表（大幅節省 RAM 並倍增載入速度）
-        def block_unnecessary_resources(route):
-            if route.request.resource_type in ["image", "stylesheet", "font", "media"]:
+        # 封鎖圖片/媒體檔，節省 RAM 並防 Timeout
+        def block_media_only(route):
+            if route.request.resource_type in ["image", "media", "font"]:
                 route.abort()
             else:
                 route.continue_()
 
-        page.route("**/*", block_unnecessary_resources)
+        page.route("**/*", block_media_only)
 
         while True:
             start_time = time.time()
@@ -111,6 +113,7 @@ def monitor_loop():
             print(f"\n[{now_time}] 🔄 [巡檢開始] 正檢查 {len(TARGET_ITEMS)} 個商品庫存...", flush=True)
 
             for item in TARGET_ITEMS:
+                item_id = item["id"]
                 name = item["name"]
                 url = item["url"]
                 t_check = datetime.now().strftime("%H:%M:%S")
@@ -118,9 +121,9 @@ def monitor_loop():
                 print(f"[{t_check}] 🔍 正在載入並檢查: [{name}]", flush=True)
 
                 try:
-                    # 不下載圖片/CSS 後，頁面載入速度極快
-                    page.goto(url, timeout=12000, wait_until="domcontentloaded")
-                    
+                    page.goto(url, timeout=25000, wait_until="domcontentloaded")
+                    time.sleep(1)
+
                     # 判斷庫存
                     is_out_of_stock = page.locator("text=暫時缺貨").first.is_visible()
                     has_buy_button = (
@@ -135,17 +138,20 @@ def monitor_loop():
                         print(f"[{t_res}] 🎉🎉🎉 [{name}] 開放預訂/有貨！", flush=True)
                         
                         current_timestamp = time.time()
-                        last_time = last_notified_time.get(url, 0)
+                        last_time = item_last_notified.get(item_id, 0)
+                        time_passed = current_timestamp - last_time
 
-                        if current_timestamp - last_time >= NOTIFICATION_COOLDOWN:
+                        # ⚡ 檢查該商品自身是否已過 120 秒冷卻期
+                        if time_passed >= NOTIFICATION_COOLDOWN:
                             send_discord_notify(name, url)
-                            last_notified_time[url] = current_timestamp
+                            item_last_notified[item_id] = current_timestamp
                         else:
-                            wait_left = int(NOTIFICATION_COOLDOWN - (current_timestamp - last_time))
-                            print(f"[{t_res}] ⏳ [{name}] 仍有貨中，處於冷卻期（剩餘 {wait_left} 秒）。", flush=True)
+                            wait_left = int(NOTIFICATION_COOLDOWN - time_passed)
+                            print(f"[{t_res}] ⏳ [{name}] 處於該商品的獨立冷卻期中（剩餘 {wait_left} 秒後可再次通知）。", flush=True)
                     else:
                         print(f"[{t_res}] ❌ [{name}] 目前暫時缺貨", flush=True)
-                        last_notified_time[url] = 0
+                        # 若變回缺貨，清空該商品的冷卻紀錄，下次一有貨就能秒發通知
+                        item_last_notified[item_id] = 0
 
                 except Exception as e:
                     t_err = datetime.now().strftime("%H:%M:%S")

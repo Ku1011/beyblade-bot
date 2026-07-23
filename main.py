@@ -11,10 +11,10 @@ from playwright.sync_api import sync_playwright
 # -------------------------------------------------------------------
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1529665191586041876/adK2AjMfMcScpiskG32xmthHpU-CpAsnQ_ymncITfBmYip1DoqPL3qJLaHVO2maVjUXJ"
 
-# ⚡ 巡檢間隔時間 (秒) - 每 5 秒檢查一次
+# ⚡ 巡檢間隔時間 (秒) - 每 5 秒極速檢查一次
 CHECK_INTERVAL = 5
 
-# 🔔 重複通知冷卻時間 (秒) - 有貨時每 2 分鐘 (120 秒) 最多通知一次
+# 🔔 重複通知冷卻時間 (秒) - 若持續有貨，每 2 分鐘 (120 秒) 最多通知一次
 NOTIFICATION_COOLDOWN = 120
 
 # 監控的爆旋陀螺商品清單
@@ -40,7 +40,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return f"🤖 爆旋陀螺 5 秒巡檢 / 2 分鐘通知 Bot 運作中！當前時間: {datetime.now().strftime('%H:%M:%S')}"
+    return f"🤖 爆旋陀螺 5秒巡檢/2分鐘通知 Bot 運作中！當前時間: {datetime.now().strftime('%H:%M:%S')}"
 
 def run_flask():
     port = int(os.environ.get("PORT", 5131))
@@ -69,12 +69,12 @@ def send_discord_notify(item_name, item_url):
         print(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ 發送 Discord 通知時發生錯誤: {e}", flush=True)
 
 # -------------------------------------------------------------------
-# 4. Playwright 多商品監控主邏輯 (5 秒極速巡檢 / 2 分鐘冷卻通知)
+# 4. Playwright 多商品極速監控主邏輯
 # -------------------------------------------------------------------
 def monitor_loop():
     print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚀 5 秒極速巡檢 / 2 分鐘重複通知系統啟動...", flush=True)
     
-    # 記錄每個商品上一次發送通知的時間戳 (Key: url, Value: timestamp)
+    # 紀錄各商品上次通知的時間戳 (Key: url, Value: timestamp)
     last_notified_time = {}
 
     with sync_playwright() as p:
@@ -99,13 +99,17 @@ def monitor_loop():
                 try:
                     page.goto(url, timeout=15000, wait_until="domcontentloaded")
                     
-                    is_available = (
+                    # 1. 檢查是否有出現缺貨字眼
+                    is_out_of_stock = page.locator("text=暫時缺貨").first.is_visible()
+
+                    # 2. 檢查是否有出現真正的預訂/購買按鈕 (避開 Tag 誤判)
+                    has_buy_button = (
                         page.locator("text=預訂").first.is_visible() or 
-                        page.locator("text=預先訂購").first.is_visible() or 
-                        page.locator("text=預購").first.is_visible() or 
-                        page.locator("text=加入購物車").first.is_visible() or
-                        page.locator("text=Pre-order").first.is_visible()
+                        page.locator("text=加入購物車").first.is_visible()
                     )
+
+                    # 只有在 "未顯示缺貨" 且 "出現預訂/購物車按鈕" 時才算有貨
+                    is_available = has_buy_button and not is_out_of_stock
 
                     t_res = datetime.now().strftime("%H:%M:%S")
                     if is_available:
@@ -114,23 +118,23 @@ def monitor_loop():
                         current_timestamp = time.time()
                         last_time = last_notified_time.get(url, 0)
 
-                        # 判斷距離上次通知是否已超過 120 秒 (2 分鐘)
+                        # 距離上次通知超過 120 秒 (2 分鐘) 才再次發送
                         if current_timestamp - last_time >= NOTIFICATION_COOLDOWN:
                             send_discord_notify(name, url)
                             last_notified_time[url] = current_timestamp
                         else:
                             wait_left = int(NOTIFICATION_COOLDOWN - (current_timestamp - last_time))
-                            print(f"[{t_res}] ⏳ [{name}] 仍有貨中，處於 2 分鐘冷卻期（剩餘 {wait_left} 秒後可再次通知）。", flush=True)
+                            print(f"[{t_res}] ⏳ [{name}] 仍有貨中，處於 2 分鐘冷卻期（剩餘 {wait_left} 秒可再次通知）。", flush=True)
                     else:
-                        print(f"[{t_res}] ❌ [{name}] 目前無貨", flush=True)
-                        # 重置通知冷卻，以便下次一補貨就能瞬間通知
+                        print(f"[{t_res}] ❌ [{name}] 目前暫時缺貨", flush=True)
+                        # 重置通知冷卻，確保一變回有貨能第一時間發送通知
                         last_notified_time[url] = 0
 
                 except Exception as e:
                     t_err = datetime.now().strftime("%H:%M:%S")
                     print(f"[{t_err}] ⚠️ 檢查 [{name}] 出錯: {e}", flush=True)
 
-            # 計算本輪耗時，確保整體保持每 5 秒一次巡檢
+            # 計算本輪耗時，補齊差距時間確保整體每 5 秒巡檢一次
             elapsed = time.time() - start_time
             sleep_time = max(0, CHECK_INTERVAL - elapsed)
             

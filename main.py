@@ -69,7 +69,7 @@ def main():
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
 
-        print(f"前往網頁: {"https://www.toysrus.com.hk/zh-hk/pre-order-beyblade-x-bx-00-dragonsword-3-60f-2.0-expected-august-2026-10159693.html"}")
+        print(f"前往網頁: {'https://www.toysrus.com.hk/zh-hk/pre-order-beyblade-x-bx-00-dragonsword-3-60f-2.0-expected-august-2026-10159693.html'}")
         page.goto("https://www.toysrus.com.hk/zh-hk/pre-order-beyblade-x-bx-00-dragonsword-3-60f-2.0-expected-august-2026-10159693.html")
 
         while True:

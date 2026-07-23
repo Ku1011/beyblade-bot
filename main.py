@@ -1,18 +1,17 @@
 import os
 import time
-import asyncio
 import threading
 from datetime import datetime
 import requests
+from bs4 import BeautifulSoup
 from flask import Flask
-from playwright.async_api import async_playwright
 
 # -------------------------------------------------------------------
 # 1. 基本設定
 # -------------------------------------------------------------------
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1529665191586041876/adK2AjMfMcScpiskG32xmthHpU-CpAsnQ_ymncITfBmYip1DoqPL3qJLaHVO2maVjUXJ"
 
-# ⚡ 巡檢目標間隔 (秒)
+# ⚡ 巡檢目標間隔 (秒) - 輕量化後可以設定得非常快
 CHECK_INTERVAL = 5
 
 # 🔔 個別商品重複通知冷卻時間 (秒) - 120 秒
@@ -37,7 +36,7 @@ TARGET_ITEMS = [
     }
 ]
 
-# 全局紀錄每個商品的最後通知時間 (Key: item_id, Value: timestamp)
+# 全局紀錄每個商品的最後通知時間
 item_last_notified = {}
 
 # -------------------------------------------------------------------
@@ -47,7 +46,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return f"🤖 爆旋陀螺 100% 精準並行 Bot 運作中！當前時間: {datetime.now().strftime('%H:%M:%S')}"
+    return f"🤖 爆旋陀螺 輕量極速 Bot 運作中！當前時間: {datetime.now().strftime('%H:%M:%S')}"
 
 def run_flask():
     port = int(os.environ.get("PORT", 5131))
@@ -76,52 +75,46 @@ def send_discord_notify(item_name, item_url):
         print(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ 發送 Discord 通知時發生錯誤: {e}", flush=True)
 
 # -------------------------------------------------------------------
-# 4. 單一商品超精準檢查任務
+# 4. 輕量高效 HTML 解析檢查 logic
 # -------------------------------------------------------------------
-async def check_single_item(context, item):
+def check_item_http(item, session):
     item_id = item["id"]
     name = item["name"]
     url = item["url"]
     t_check = datetime.now().strftime("%H:%M:%S")
 
-    print(f"[{t_check}] 🔍 [精準檢查中] [{name}]...", flush=True)
-    
-    page = await context.new_page()
-    
-    # 封鎖圖片與媒體檔以加快速度，但保持 CSS/JS 正常加載
-    async def block_media(route):
-        if route.request.resource_type in ["image", "media", "font"]:
-            await route.abort()
-        else:
-            await route.continue_()
-
-    await page.route("**/*", block_media)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "zh-HK,zh-TW;q=0.9,zh;q=0.8,en-US;q=0.7,en;q=0.6"
+    }
 
     try:
-        await page.goto(url, timeout=25000, wait_until="domcontentloaded")
-
-        # 🎯 步驟 1: 等待頁面基礎區域載入完成
-        await page.wait_for_selector("body", timeout=15000)
-        await asyncio.sleep(1)  # 給予 1 秒讓動態 JavaScript 渲染按鈕狀態
-
-        # 🎯 步驟 2: 多關鍵字檢查是否提示「缺貨」
-        out_of_stock_keywords = ["暫時缺貨", "缺貨", "Out of stock", "售罄"]
-        is_out_of_stock = False
+        print(f"[{t_check}] 🔍 正在檢查: [{name}]...", flush=True)
+        response = session.get(url, headers=headers, timeout=10)
         
-        for kw in out_of_stock_keywords:
-            if await page.locator(f"text={kw}").first.is_visible():
-                is_out_of_stock = True
-                break
+        if response.status_code != 200:
+            print(f"[{t_check}] ⚠️ 網頁回應異常 HTTP {response.status_code}: [{name}]", flush=True)
+            return
 
-        # 🎯 步驟 3: 精準尋找真正的 HTML 按鈕，並確認非 disabled (禁用) 狀態
-        buy_button = page.locator("button:has-text('預訂'), button:has-text('加入購物車'), a:has-text('預訂'), a:has-text('加入購物車')").first
-        
+        soup = BeautifulSoup(response.text, "html.parser")
+        page_text = soup.get_text()
+
+        # 🎯 判定 1：檢查頁面是否有「暫時缺貨」等文字
+        is_out_of_stock = any(kw in page_text for kw in ["暫時缺貨", "Out of stock", "售罄"])
+
+        # 🎯 判定 2：檢查是否有可用的加入購物車/預訂按鈕
+        # 尋找含有 add-to-cart 或相應 class / button 的元素
         has_buy_button = False
-        if await buy_button.is_visible():
-            # is_enabled() 能確認按鈕是否被停用 (例如變灰、無法點擊)
-            has_buy_button = await buy_button.is_enabled()
+        add_to_cart_btn = soup.find("button", class_=lambda c: c and "add-to-cart" in c)
+        
+        if add_to_cart_btn:
+            # 確保按鈕沒有 disabled 屬性
+            is_disabled = add_to_cart_btn.has_attr("disabled") or "disabled" in add_to_cart_btn.get("class", [])
+            has_buy_button = not is_disabled
+        else:
+            # 備用方案：頁面包含「預訂」或「加入購物車」字眼，且不包含「暫時缺貨」
+            has_buy_button = ("預訂" in page_text or "加入購物車" in page_text) and not is_out_of_stock
 
-        # 🎯 步驟 4: 綜合判定是否有貨
         is_available = has_buy_button and not is_out_of_stock
 
         t_res = datetime.now().strftime("%H:%M:%S")
@@ -132,7 +125,6 @@ async def check_single_item(context, item):
             last_time = item_last_notified.get(item_id, 0)
             time_passed = current_timestamp - last_time
 
-            # 檢查個別商品的獨立冷卻時間
             if time_passed >= NOTIFICATION_COOLDOWN:
                 send_discord_notify(name, url)
                 item_last_notified[item_id] = current_timestamp
@@ -141,65 +133,33 @@ async def check_single_item(context, item):
                 print(f"[{t_res}] ⏳ [{name}] 處於獨立冷卻期中（剩餘 {wait_left} 秒）。", flush=True)
         else:
             print(f"[{t_res}] ❌ [{name}] 目前暫時缺貨", flush=True)
-            # 一旦變回缺貨，清空該商品的冷卻紀錄，下次上架可立刻發送通知
             item_last_notified[item_id] = 0
 
     except Exception as e:
         t_err = datetime.now().strftime("%H:%M:%S")
         print(f"[{t_err}] ⚠️ 檢查 [{name}] 出錯: {e}", flush=True)
-    finally:
-        await page.close()
 
 # -------------------------------------------------------------------
-# 5. Playwright 並行主巡檢邏輯 (含自動記憶體回收與防 Crash)
+# 5. 主巡檢 Loop
 # -------------------------------------------------------------------
-async def monitor_loop():
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚀 超精準異步並行監控系統啟動...", flush=True)
+def monitor_loop():
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚀 秒速 HTTP 輕量監控系統啟動...", flush=True)
+    session = requests.Session()
 
     while True:
-        try:
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(
-                    headless=True,
-                    args=[
-                        "--no-sandbox",
-                        "--disable-setuid-sandbox",
-                        "--disable-dev-shm-usage",
-                        "--disable-accelerated-2d-canvas",
-                        "--no-first-run",
-                        "--no-zygote",
-                        "--disable-gpu"
-                    ]
-                )
+        start_time = time.time()
+        now_time = datetime.now().strftime("%H:%M:%S")
+        print(f"\n[{now_time}] 🔄 [巡檢開始] 正檢查 {len(TARGET_ITEMS)} 個商品庫存...", flush=True)
 
-                while True:
-                    start_time = time.time()
-                    now_time = datetime.now().strftime("%H:%M:%S")
-                    print(f"\n[{now_time}] 🔄 [巡檢開始] 發起 {len(TARGET_ITEMS)} 個商品精準檢查...", flush=True)
+        for item in TARGET_ITEMS:
+            check_item_http(item, session)
+            time.sleep(0.5) # 商品之間間隔 0.5 秒，避免請求過快
 
-                    context = await browser.new_context(
-                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                    )
-
-                    # 同時並行檢查所有商品
-                    tasks = [check_single_item(context, item) for item in TARGET_ITEMS]
-                    await asyncio.gather(*tasks)
-
-                    # 每輪結束手動關閉 Context，防止 Render 免費版記憶體溢出
-                    await context.close()
-
-                    elapsed = time.time() - start_time
-                    sleep_time = max(0, CHECK_INTERVAL - elapsed)
-                    
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] ⏱️ 本輪耗時 {elapsed:.2f} 秒。等待 {sleep_time:.2f} 秒...", flush=True)
-                    await asyncio.sleep(sleep_time)
-
-        except Exception as main_e:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚨 瀏覽器異常，5 秒後自動恢復: {main_e}", flush=True)
-            await asyncio.sleep(5)
-
-def start_async_loop():
-    asyncio.run(monitor_loop())
+        elapsed = time.time() - start_time
+        sleep_time = max(0, CHECK_INTERVAL - elapsed)
+        
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] ⏱️ 本輪耗時 {elapsed:.2f} 秒。等待 {sleep_time:.2f} 秒...", flush=True)
+        time.sleep(sleep_time)
 
 # -------------------------------------------------------------------
 # 6. 主程式入口
@@ -208,4 +168,4 @@ if __name__ == "__main__":
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
 
-    start_async_loop()
+    monitor_loop()

@@ -33,11 +33,6 @@ TARGET_ITEMS = [
         "id": "item_3",
         "name": "UX-21 煉獄下界三陀螺套裝",
         "url": "https://www.toysrus.com.hk/zh-hk/pre-order-beyblade-x-ux-21-hellsnether-deck-set-expected-august-2026-10159699.html"
-    },
-    {
-        "id": "item_4",
-        "name": "(網店預購) Bandai萬代 [解體匠機] RX-93 Nu高達 (2026年版) (預計2026年8月發貨)",
-        "url": "https://www.toysrus.com.hk/zh-hk/pre-order-bandai-metal-structure-kaitai-shou-ki-rx-93-%CE%BDgundam-expected-august-2026-10159700.html"
     }
 ]
 
